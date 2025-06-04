@@ -1,54 +1,119 @@
 ---
-# Base task for configuring a Raspi
+# Base task for configuring a Raslogserv-it
 
 - name: 'Transfer init scripts'
   become: yes
-  become_method: sudo
-  copy: src=./ dest=/home/pi/init/ mode=0755
+  copy:
+    src: ../files/
+    dest: /home/logserv-it/init/
+    mode: '0755'
+    owner: logserv-it
+    group: logserv-it
 
 - name: 'Thin out Raspbian'
   become: yes
-  become_method: sudo
-  shell: /home/pi/init/anti-raspbian-bloat.sh
+  shell: /home/logserv-it/init/anti-raspbian-bloat.sh
 
-- apt: update_cache=yes
-  name: 'Update apt cache'
+- name: 'Update apt cache'
+  apt:
+    update_cache: yes
   become: yes
-  become_method: sudo
 
-- apt: upgrade=dist
-  name: 'Upgrade apt dist'
+- name: 'Upgrade apt packages'
+  apt:
+    upgrade: dist
   become: yes
-  become_method: sudo
 
 - name: 'Configure locale'
   become: yes
-  become_method: sudo
-  shell: /home/pi/init/configure-locale.sh
+  shell: /home/logserv-it/init/configure-locale.sh
 
 - name: 'Set timezone'
   become: yes
-  become_method: sudo
-  shell: /home/pi/init/set-timezone.sh
+  shell: /home/logserv-it/init/set-timezone.sh
 
 - name: 'Set keyboard layout'
   become: yes
-  become_method: sudo
-  shell: /home/pi/init/set-keyboard-layout.sh
+  shell: /home/logserv-it/init/set-keyboard-layout.sh
 
-- name: 'Install packages'
+- name: 'Install X11 and TightVNC server'
   apt:
-    pkg={{item}}
-    state=installed
+    name:
+      - tightvncserver
+      - xserver-xorg
+      - xinit
+      - x11-utils
+      - x11-xserver-utils
+      - xterm
+    state: present
   become: yes
-  become_method: sudo
-  with_items:
-    - tightvncserver
 
-- name: 'Reboot'
+- name: 'Create .vnc directory for logserv-it'
+  file:
+    path: /home/logserv-it/.vnc
+    state: directory
+    owner: logserv-it
+    group: logserv-it
+    mode: '0700'
   become: yes
-  become_method: sudo
+
+- name: 'Create xstartup script for VNC'
+  copy:
+    dest: /home/logserv-it/.vnc/xstartup
+    content: |
+      #!/bin/sh
+      xrdb $HOME/.Xresources
+      xsetroot -solid grey
+      xterm &
+    owner: logserv-it
+    group: logserv-it
+    mode: '0755'
+  become: yes
+
+- name: 'Create systemd unit for VNC on :1'
+  copy:
+    dest: /etc/systemd/system/vncserver@1.service
+    content: |
+      [Unit]
+      Description=Start TightVNC server at startup (display :1)
+      After=network.target
+
+      [Service]
+      Type=forking
+      User=logserv-it
+      PAMName=login
+      PIDFile=/home/logserv-it/.vnc/%H:1.pid
+      ExecStartPre=-/usr/bin/vncserver -kill :1
+      ExecStart=/usr/bin/vncserver :1 -geometry 1280x800
+      ExecStop=/usr/bin/vncserver -kill :1
+
+      [Install]
+      WantedBy=multi-user.target
+  become: yes
+
+- name: 'Reload systemd'
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: 'Enable and start VNC service'
+  systemd:
+    name: vncserver@1
+    enabled: yes
+    state: started
+  become: yes
+
+- name: 'Set FullPageOS URL'
+  lineinfile:
+    path: /boot/fullpageos.txt
+    regexp: '^FULLPAGEOS_URL='
+    line: 'FULLPAGEOS_URL=http://deine-zielseite.local'
+    backrefs: yes
+  become: yes
+
+- name: 'Reboot after configuration'
   command: shutdown -r now "Ansible updates triggered"
+  become: yes
   async: 0
   poll: 0
   ignore_errors: true
